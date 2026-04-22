@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ultimate AR Hand Master – MANISH</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#000;color:#fff;font-family:monospace;overflow:hidden;width:100%;height:100vh}
+#app{position:relative;width:100%;height:100vh;display:flex;align-items:center;justify-content:center}
+#videoEl{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover;transform:scaleX(-1);opacity:0.45}
+#overlayCanvas{position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none}
+#ui{position:absolute;top:16px;left:16px;z-index:10;display:flex;flex-direction:column;gap:8px}
+.badge{background:rgba(0,0,0,0.7);border:1px solid rgba(255,255,255,0.2);border-radius:8px;padding:6px 12px;font-size:12px;color:#fff;display:flex;align-items:center;gap:8px}
+.dot{width:8px;height:8px;border-radius:50%;background:#666;transition:all 0.3s}
+.dot.active{background:#0f0;box-shadow:0 0 6px #0f0}
+#gestureLabel{position:absolute;bottom:20px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,0.8);border:1px solid rgba(255,255,255,0.3);border-radius:12px;padding:8px 20px;font-size:14px;color:#fff;z-index:10;letter-spacing:2px;white-space:nowrap}
+#efmToggle{cursor:pointer;user-select:none}
+#efmToggle:hover{border-color:rgba(255,200,0,0.6)}
+.efm-on{border-color:rgba(255,200,0,0.8)!important;color:#ffd700!important}
+#manishBg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:clamp(50px,13vw,130px);font-weight:900;letter-spacing:0.3em;color:rgba(255,255,255,0.04);z-index:1;pointer-events:none;user-select:none;font-family:Arial Black,Impact,sans-serif;white-space:nowrap}
+#loading{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:14px;z-index:20;background:#000}
+#loading h1{font-size:clamp(40px,10vw,90px);font-weight:900;letter-spacing:0.3em;color:#fff;font-family:Arial Black,sans-serif}
+#loading p{font-size:13px;color:#888;letter-spacing:2px}
+#loadStatus{font-size:12px;color:#666}
+#loadBtn{background:rgba(255,255,255,0.1);border:1px solid rgba(255,255,255,0.3);color:#fff;padding:12px 28px;border-radius:8px;cursor:pointer;font-size:14px;font-family:monospace;letter-spacing:1px;margin-top:8px;transition:all 0.2s}
+#loadBtn:hover{background:rgba(255,255,255,0.2);border-color:rgba(255,255,255,0.6)}
+#helpPanel{position:absolute;top:16px;right:16px;z-index:10;background:rgba(0,0,0,0.75);border:1px solid rgba(255,255,255,0.15);border-radius:10px;padding:12px 16px;font-size:11px;line-height:1.9;color:#ccc}
+#helpPanel b{color:#fff}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="manishBg">MANISH</div>
+  <video id="videoEl" playsinline autoplay muted></video>
+  <canvas id="overlayCanvas"></canvas>
+
+  <div id="ui">
+    <div class="badge"><span class="dot" id="camDot"></span>Camera</div>
+    <div class="badge"><span class="dot" id="mpDot"></span>MediaPipe</div>
+    <div class="badge" id="efmToggle" onclick="toggleEFM()">
+      <span class="dot" id="efmDot"></span>Field Theory: <span id="efmStatus">OFF</span>
+    </div>
+  </div>
+
+  <div id="helpPanel">
+    <b>GESTURES</b><br>
+    ☝️ Point → Butterfly<br>
+    ✌️ Peace → Mantis<br>
+    ✊ Fist → Fire blast<br>
+    👉👈 Both index → Lightning<br>
+    🤲 Both open → Heart<br>
+    <hr style="border-color:rgba(255,255,255,0.1);margin:6px 0">
+    <b>Field Theory ON</b><br>
+    Left = + charge<br>
+    Right = − charge<br>
+    Move closer → stronger field
+  </div>
+
+  <div id="gestureLabel">Initializing...</div>
+
+  <div id="loading">
+    <h1>MANISH</h1>
+    <p>ULTIMATE AR HAND MASTER</p>
+    <div id="loadStatus">Click button to begin</div>
+    <button id="loadBtn" onclick="initApp()">▶ Start AR Experience</button>
+    <p style="font-size:11px;color:#444;margin-top:4px">Allow camera access when prompted</p>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+
+<script>
+// ─── Elements ────────────────────────────────────────────────────────────────
+const video        = document.getElementById('videoEl');
+const canvas       = document.getElementById('overlayCanvas');
+const ctx          = canvas.getContext('2d');
+const gestureLabel = document.getElementById('gestureLabel');
+const camDot       = document.getElementById('camDot');
+const mpDot        = document.getElementById('mpDot');
+const efmDot       = document.getElementById('efmDot');
+const efmStatus    = document.getElementById('efmStatus');
+const efmToggle    = document.getElementById('efmToggle');
+const loadStatus   = document.getElementById('loadStatus');
+
+// ─── State ───────────────────────────────────────────────────────────────────
+let efmMode        = false;
+let hands          = null;
+let camera         = null;
+let currentResults = null;
+let t              = 0;
+let particles      = [];
+let heartParticles = [];
+let lightningPts   = [];
+let butterflyAngle = 0;
+let mantisAnim     = 0;
+let fireCooldown   = 0;
+let lightningFrame = 0;
+
+// ─── Resize ──────────────────────────────────────────────────────────────────
+function resize() {
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ─── EFM toggle ──────────────────────────────────────────────────────────────
+function toggleEFM() {
+  efmMode = !efmMode;
+  efmStatus.textContent = efmMode ? 'ON' : 'OFF';
+  efmDot.style.background  = efmMode ? '#ffd700' : '#666';
+  efmDot.style.boxShadow   = efmMode ? '0 0 6px #ffd700' : 'none';
+  efmToggle.classList.toggle('efm-on', efmMode);
+}
+
+// ─── Landmark helpers ─────────────────────────────────────────────────────────
+function lm(results, handIdx, ptIdx) {
+  if (!results?.multiHandLandmarks) return null;
+  const h = results.multiHandLandmarks[handIdx];
+  if (!h) return null;
+  return { x: (1 - h[ptIdx].x) * canvas.width, y: h[ptIdx].y * canvas.height };
+}
+
+function fingerUp(lms, tipIdx, pipIdx) {
+  return lms[tipIdx].y < lms[pipIdx].y;
+}
+
+// ─── Gesture detector ─────────────────────────────────────────────────────────
+function detectGesture(results) {
+  if (!results?.multiHandLandmarks?.length) return 'none';
+
+  const L = results.multiHandLandmarks[0];
+  const idx  = fingerUp(L, 8, 6);
+  const mid  = fingerUp(L, 12, 10);
+  const ring = fingerUp(L, 16, 14);
+  const pnk  = fingerUp(L, 20, 18);
+
+  const allCurled = !idx && !mid && !ring && !pnk;
+  const allOpen   = idx && mid && ring && pnk;
+
+  if (results.multiHandLandmarks.length === 2) {
+    const R     = results.multiHandLandmarks[1];
+    const ridx  = fingerUp(R, 8, 6);
+    const rmid  = fingerUp(R, 12, 10);
+    const rring = fingerUp(R, 16, 14);
+    const rpnk  = fingerUp(R, 20, 18);
+    const rallOpen = ridx && rmid && rring && rpnk;
+
+    if (idx && !mid && !ring && !pnk && ridx && !rmid) return 'lightning';
+    if (allOpen && rallOpen)                           return 'heart_both';
+  }
+
+  if (allCurled) return 'fist';
+  if (allOpen)   return 'open_palm';
+  if (idx && !mid && !ring && !pnk) return 'point';
+  if (idx && mid && !ring && !pnk)  return 'peace';
+  return 'unknown';
+}
+
+// ─── Drawing utilities ────────────────────────────────────────────────────────
+function radialGlow(x, y, r, r_g, g_b, alpha) {
+  const gr = ctx.createRadialGradient(x, y, 0, x, y, r);
+  gr.addColorStop(0, `rgba(${r_g},${g_b},255,${alpha})`);
+  gr.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = gr;
+  ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+}
+
+// ─── Butterfly ────────────────────────────────────────────────────────────────
+function drawButterfly(x, y, wing) {
+  const w = Math.abs(Math.cos(wing)) * 42;
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.shadowBlur = 22; ctx.shadowColor = '#88ffcc';
+
+  // Upper wings
+  ctx.fillStyle = 'rgba(80,255,160,0.85)';
+  ctx.beginPath(); ctx.ellipse(-w * 0.55, -12, w * 0.5, 16, -0.35, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( w * 0.55, -12,  w * 0.5, 16,  0.35, 0, Math.PI * 2); ctx.fill();
+
+  // Lower wings
+  ctx.fillStyle = 'rgba(40,200,120,0.7)';
+  ctx.beginPath(); ctx.ellipse(-w * 0.4, 4, w * 0.35, 10, -0.5, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( w * 0.4, 4,  w * 0.35, 10,  0.5, 0, Math.PI * 2); ctx.fill();
+
+  // Shine
+  ctx.fillStyle = 'rgba(200,255,230,0.45)';
+  ctx.beginPath(); ctx.ellipse(-w * 0.5, -14, w * 0.2, 7, -0.35, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.ellipse( w * 0.5, -14,  w * 0.2, 7,  0.35, 0, Math.PI * 2); ctx.fill();
+
+  // Body
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = '#1a3322';
+  ctx.beginPath(); ctx.ellipse(0, 0, 3, 13, 0, 0, Math.PI * 2); ctx.fill();
+
+  // Antennae
+  ctx.strokeStyle = '#88ffcc'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(0, -13); ctx.quadraticCurveTo(-8, -24, -5, -28); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, -13); ctx.quadraticCurveTo( 8, -24,  5, -28); ctx.stroke();
+  ctx.restore();
+}
+
+// ─── Praying Mantis ──────────────────────────────────────────────────────────
+function drawMantis(x1, y1, x2, y2) {
+  const mx = (x1 + x2) / 2, my = (y1 + y2) / 2;
+  const angle = Math.atan2(y2 - y1, x2 - x1) + Math.PI / 2;
+  const a = mantisAnim;
+  ctx.save();
+  ctx.translate(mx, my);
+  ctx.rotate(angle);
+  ctx.shadowBlur = 16; ctx.shadowColor = '#44ff88';
+
+  // Abdomen
+  ctx.fillStyle = '#1a5c2a'; ctx.strokeStyle = '#44ff88'; ctx.lineWidth = 1.5;
+  ctx.beginPath(); ctx.ellipse(0, 6, 6, 18, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  // Thorax
+  ctx.fillStyle = '#236b35';
+  ctx.beginPath(); ctx.ellipse(0, -14, 5, 10, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  // Head
+  ctx.fillStyle = '#2a7a3f';
+  ctx.beginPath(); ctx.ellipse(0, -26, 5, 6, 0, 0, Math.PI * 2); ctx.fill(); ctx.stroke();
+
+  // Eyes
+  ctx.fillStyle = '#aaff44';
+  ctx.beginPath(); ctx.arc(-3, -27, 2, 0, Math.PI * 2); ctx.fill();
+  ctx.beginPath(); ctx.arc( 3, -27, 2, 0, Math.PI * 2); ctx.fill();
+
+  // Forelegs (raptorial)
+  ctx.strokeStyle = '#66ffaa'; ctx.lineWidth = 2;
+  const swipe = Math.sin(a) * 8;
+  ctx.beginPath(); ctx.moveTo(-4, -18); ctx.lineTo(-18 + swipe, -30); ctx.lineTo(-10 + swipe, -18); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( 4, -18); ctx.lineTo( 18 - swipe, -30); ctx.lineTo( 10 - swipe, -18); ctx.stroke();
+
+  // Mid legs
+  ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(-5, -8); ctx.lineTo(-18, -2 + Math.sin(a)*3); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( 5, -8); ctx.lineTo( 18, -2 + Math.sin(a)*3); ctx.stroke();
+
+  // Hind legs
+  ctx.beginPath(); ctx.moveTo(-5, 4); ctx.lineTo(-20, 14 + Math.sin(a)*3); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo( 5, 4); ctx.lineTo( 20, 14 + Math.sin(a)*3); ctx.stroke();
+
+  ctx.shadowBlur = 0;
+  ctx.restore();
+}
+
+// ─── Particles ────────────────────────────────────────────────────────────────
+function addParticle(x, y, color, vx, vy, life) {
+  particles.push({ x, y, color, vx: vx ?? (Math.random()-0.5)*5, vy: vy ?? -(Math.random()*5+1), life: life ?? 60, maxLife: life ?? 60, size: 2+Math.random()*3 });
+}
+
+function updateParticles() {
+  particles = particles.filter(p => p.life > 0);
+  for (const p of particles) {
+    p.x  += p.vx;
+    p.y  += p.vy;
+    p.vy += 0.08;
+    p.life--;
+    ctx.globalAlpha = p.life / p.maxLife;
+    ctx.fillStyle = p.color;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, p.size * (p.life / p.maxLife), 0, Math.PI*2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ─── Fire blast ───────────────────────────────────────────────────────────────
+function drawFire(x, y) {
+  for (let i = 0; i < 5; i++) {
+    const hue = Math.random() * 40;
+    addParticle(x, y, `hsl(${hue},100%,${50+Math.random()*30}%)`, (Math.random()-0.5)*9, -(Math.random()*7+2), 50);
+  }
+  ctx.shadowBlur = 40; ctx.shadowColor = '#ff6600';
+  const g = ctx.createRadialGradient(x, y, 0, x, y, 90);
+  g.addColorStop(0, 'rgba(255,255,120,0.5)');
+  g.addColorStop(0.4,'rgba(255,80,0,0.3)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(x, y, 90, 0, Math.PI*2); ctx.fill();
+  ctx.shadowBlur = 0;
+}
+
+// ─── Lightning arc ────────────────────────────────────────────────────────────
+function generateLightning(x1, y1, x2, y2) {
+  const pts = [{ x: x1, y: y1 }];
+  const segs = 14;
+  for (let i = 1; i < segs; i++) {
+    const f = i / segs;
+    pts.push({ x: x1 + (x2-x1)*f + (Math.random()-0.5)*50, y: y1 + (y2-y1)*f + (Math.random()-0.5)*50 });
+  }
+  pts.push({ x: x2, y: y2 });
+  return pts;
+}
+
+function drawLightningArc(pts) {
+  // Outer glow
+  ctx.shadowBlur = 25; ctx.shadowColor = '#aaccff';
+  ctx.strokeStyle = 'rgba(180,210,255,0.5)'; ctx.lineWidth = 4;
+  ctx.beginPath();
+  pts.forEach((p, i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
+  ctx.stroke();
+  // Core
+  ctx.strokeStyle = '#ffffff'; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  pts.forEach((p, i) => i===0 ? ctx.moveTo(p.x,p.y) : ctx.lineTo(p.x,p.y));
+  ctx.stroke();
+  ctx.shadowBlur = 0;
+}
+
+// ─── Heart ────────────────────────────────────────────────────────────────────
+function addHeartParticle(cx, cy) {
+  heartParticles.push({ x: cx + (Math.random()-0.5)*40, y: cy + (Math.random()-0.5)*40, vx: (Math.random()-0.5)*2, vy: -Math.random()*2-1, life: 80, color: `hsl(${330+Math.random()*40},100%,${55+Math.random()*25}%)` });
+}
+
+function drawHeart(cx, cy, size, phase) {
+  ctx.save();
+  ctx.shadowBlur = 35 + Math.sin(phase)*12; ctx.shadowColor = '#ff2288';
+  ctx.fillStyle = '#ff1177';
+  ctx.beginPath();
+  for (let i = 0; i <= Math.PI*2; i += 0.04) {
+    const hx = cx + size * 16 * Math.pow(Math.sin(i), 3) / 16;
+    const hy = cy - size * (13*Math.cos(i) - 5*Math.cos(2*i) - 2*Math.cos(3*i) - Math.cos(4*i)) / 16;
+    i === 0 ? ctx.moveTo(hx, hy) : ctx.lineTo(hx, hy);
+  }
+  ctx.closePath(); ctx.fill();
+  ctx.shadowBlur = 0; ctx.restore();
+
+  // Heart particles
+  heartParticles = heartParticles.filter(p => p.life > 0);
+  for (const p of heartParticles) {
+    p.x += p.vx; p.y += p.vy; p.life--;
+    ctx.globalAlpha = p.life / 80;
+    ctx.fillStyle = p.color;
+    ctx.beginPath(); ctx.arc(p.x, p.y, 3, 0, Math.PI*2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+  if (Math.random() < 0.5) addHeartParticle(cx, cy);
+}
+
+// ─── EM Field lines ───────────────────────────────────────────────────────────
+function drawEMField(lx, ly, rx, ry) {
+  const dx = rx - lx, dy = ry - ly;
+  const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+  const strength = Math.max(0, 1 - dist / 650);
+  const fieldE   = strength * strength;
+  const lineCount = Math.floor(6 + fieldE * 22);
+  const perp = Math.atan2(dy, dx) + Math.PI/2;
+
+  ctx.shadowBlur = 5 + fieldE * 35;
+  for (let li = 0; li < lineCount; li++) {
+    const spread = (li / lineCount - 0.5) * 220 * (1 - fieldE * 0.6);
+    const sx = lx + Math.cos(perp) * spread;
+    const sy = ly + Math.sin(perp) * spread;
+    const ex = rx + Math.cos(perp) * spread;
+    const ey = ry + Math.sin(perp) * spread;
+    const alpha = 0.15 + fieldE * 0.75;
+    const blue  = li % 2 === 0;
+    ctx.shadowColor = blue ? '#6699ff' : '#ff6644';
+    ctx.strokeStyle = blue ? `rgba(100,160,255,${alpha})` : `rgba(255,110,80,${alpha})`;
+    ctx.lineWidth = 0.5 + fieldE * 1.5;
+    const cpx = (sx+ex)/2 + Math.cos(perp)*40*Math.sin(t*0.04+li);
+    const cpy = (sy+ey)/2 + Math.sin(perp)*40*Math.sin(t*0.04+li);
+    ctx.beginPath(); ctx.moveTo(sx,sy); ctx.quadraticCurveTo(cpx,cpy,ex,ey); ctx.stroke();
+  }
+  ctx.shadowBlur = 0;
+
+  // Charge labels
+  const pulseR = 18 + fieldE * 22;
+  ctx.shadowBlur = 20 + fieldE*40; ctx.shadowColor = '#4488ff';
+  ctx.strokeStyle = `rgba(80,140,255,${0.5+fieldE*0.5})`; ctx.lineWidth = 2+fieldE*3;
+  ctx.beginPath(); ctx.arc(lx, ly, pulseR, 0, Math.PI*2); ctx.stroke();
+  ctx.shadowColor = '#ff6644';
+  ctx.strokeStyle = `rgba(255,100,70,${0.5+fieldE*0.5})`;
+  ctx.beginPath(); ctx.arc(rx, ry, pulseR, 0, Math.PI*2); ctx.stroke();
+  ctx.shadowBlur = 0;
+
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.shadowBlur = 25; ctx.shadowColor = '#4488ff'; ctx.fillStyle = '#88aaff';
+  ctx.fillText('+', lx, ly - pulseR - 14);
+  ctx.shadowColor = '#ff6644'; ctx.fillStyle = '#ff8866';
+  ctx.fillText('−', rx, ry - pulseR - 14);
+  ctx.shadowBlur = 0;
+
+  // Physics label
+  const Estr = (50000 / (dist*dist)).toFixed(3);
+  ctx.font = '11px monospace'; ctx.fillStyle = 'rgba(255,255,180,0.75)';
+  ctx.fillText(`E ∝ 1/r²   |r|=${Math.round(dist)}px   E≈${Estr}`, (lx+rx)/2, (ly+ry)/2 - 40);
+}
+
+// ─── Hand skeleton ────────────────────────────────────────────────────────────
+const CONNECTIONS = [[0,1],[1,2],[2,3],[3,4],[0,5],[5,6],[6,7],[7,8],[5,9],[9,10],[10,11],[11,12],[9,13],[13,14],[14,15],[15,16],[13,17],[17,18],[18,19],[19,20],[0,17]];
+
+function drawSkeletons(results) {
+  if (!results?.multiHandLandmarks) return;
+  for (const lms of results.multiHandLandmarks) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)'; ctx.lineWidth = 1;
+    for (const [a,b] of CONNECTIONS) {
+      ctx.beginPath();
+      ctx.moveTo((1-lms[a].x)*canvas.width, lms[a].y*canvas.height);
+      ctx.lineTo((1-lms[b].x)*canvas.width, lms[b].y*canvas.height);
+      ctx.stroke();
+    }
+    for (const p of lms) {
+      ctx.fillStyle = 'rgba(255,255,255,0.5)';
+      ctx.beginPath(); ctx.arc((1-p.x)*canvas.width, p.y*canvas.height, 2.5, 0, Math.PI*2); ctx.fill();
+    }
+  }
+}
+
+// ─── Render loop ──────────────────────────────────────────────────────────────
+function render() {
+  requestAnimationFrame(render);
+  const results = currentResults;
+  t++;
+  butterflyAngle += 0.13;
+  mantisAnim     += 0.09;
+  fireCooldown    = Math.max(0, fireCooldown - 1);
+
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!results) { gestureLabel.textContent = 'NO HANDS DETECTED'; return; }
+
+  const gesture = detectGesture(results);
+  gestureLabel.textContent = gesture.replace(/_/g,' ').toUpperCase();
+
+  drawSkeletons(results);
+  updateParticles();
+
+  // ── EFM mode ──────────────────────────────────────────────────────────────
+  if (efmMode) {
+    if (results.multiHandLandmarks?.length >= 2) {
+      const L = results.multiHandLandmarks[0];
+      const R = results.multiHandLandmarks[1];
+      const lx = (1-L[9].x)*canvas.width, ly = L[9].y*canvas.height;
+      const rx = (1-R[9].x)*canvas.width, ry = R[9].y*canvas.height;
+      drawEMField(lx, ly, rx, ry);
+    } else {
+      gestureLabel.textContent = 'SHOW BOTH HANDS FOR FIELD THEORY';
+    }
+    return;
+  }
+
+  // ── Butterfly ─────────────────────────────────────────────────────────────
+  if (gesture === 'point') {
+    const tip = lm(results, 0, 8);
+    if (tip) {
+      ctx.shadowBlur = 20; ctx.shadowColor = '#88ffcc';
+      radialGlow(tip.x, tip.y, 35, 80, 200, 0.4);
+      ctx.shadowBlur = 0;
+      drawButterfly(tip.x, tip.y - 35, butterflyAngle);
+    }
+  }
+
+  // ── Mantis ────────────────────────────────────────────────────────────────
+  if (gesture === 'peace') {
+    const p1 = lm(results, 0, 8);
+    const p2 = lm(results, 0, 12);
+    if (p1 && p2) drawMantis(p1.x, p1.y, p2.x, p2.y);
+  }
+
+  // ── Fire blast ────────────────────────────────────────────────────────────
+  if (gesture === 'fist' && fireCooldown === 0) {
+    fireCooldown = 2;
+    const wrist = lm(results, 0, 0);
+    if (wrist) drawFire(wrist.x, wrist.y);
+  }
+
+  // ── Open palm: sustained fire shockwave ───────────────────────────────────
+  if (gesture === 'open_palm') {
+    const palm = lm(results, 0, 9);
+    if (palm && fireCooldown === 0) {
+      fireCooldown = 3;
+      for (let i = 0; i < 8; i++) {
+        const ang = (i / 8) * Math.PI * 2;
+        addParticle(palm.x, palm.y, `hsl(${Math.random()*50},100%,60%)`, Math.cos(ang)*5, Math.sin(ang)*5, 45);
+      }
+      radialGlow(palm.x, palm.y, 70, 255, 80, 0.35);
+    }
+  }
+
+  // ── Lightning ─────────────────────────────────────────────────────────────
+  if (gesture === 'lightning') {
+    lightningFrame++;
+    if (lightningFrame % 3 === 0) {
+      const t1 = lm(results, 0, 8);
+      const t2 = lm(results, 1, 8);
+      if (t1 && t2) lightningPts = generateLightning(t1.x, t1.y, t2.x, t2.y);
+    }
+    if (lightningPts.length) drawLightningArc(lightningPts);
+    const t1 = lm(results, 0, 8);
+    const t2 = lm(results, 1, 8);
+    if (t1) { ctx.shadowBlur=25; ctx.shadowColor='#aaccff'; radialGlow(t1.x,t1.y,28,150,200,0.7); ctx.shadowBlur=0; }
+    if (t2) { ctx.shadowBlur=25; ctx.shadowColor='#aaccff'; radialGlow(t2.x,t2.y,28,150,200,0.7); ctx.shadowBlur=0; }
+    // Sparks
+    if (lightningPts.length && Math.random()<0.5) {
+      const mid = lightningPts[Math.floor(lightningPts.length/2)];
+      addParticle(mid.x, mid.y, '#ccddff', (Math.random()-0.5)*6, (Math.random()-0.5)*6, 25);
+    }
+  }
+
+  // ── Heart ─────────────────────────────────────────────────────────────────
+  if (gesture === 'heart_both') {
+    const L = results.multiHandLandmarks[0];
+    const R = results.multiHandLandmarks[1];
+    const cx = ((1-L[9].x)*canvas.width + (1-R[9].x)*canvas.width) / 2;
+    const cy = (L[9].y*canvas.height + R[9].y*canvas.height) / 2 - 70;
+    const sz = 18 + Math.sin(t*0.06)*4;
+    drawHeart(cx, cy, sz, t*0.1);
+  }
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+async function initApp() {
+  document.getElementById('loading').style.display = 'none';
+
+  // Camera
+  try {
+    loadStatus.textContent = 'Requesting camera...';
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720, facingMode: 'user' } });
+    video.srcObject = stream;
+    camDot.classList.add('active');
+  } catch(e) {
+    document.getElementById('loading').style.display = 'flex';
+    loadStatus.textContent = 'Camera error: ' + e.message;
+    return;
+  }
+
+  // MediaPipe
+  try {
+    loadStatus.textContent = 'Loading MediaPipe Hands...';
+    hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
+    hands.setOptions({ maxNumHands: 2, modelComplexity: 1, minDetectionConfidence: 0.72, minTrackingConfidence: 0.55 });
+    hands.onResults(r => { currentResults = r; });
+
+    camera = new Camera(video, {
+      onFrame: async () => { await hands.send({ image: video }); },
+      width: 1280, height: 720
+    });
+    await camera.start();
+    mpDot.classList.add('active');
+    render();
+  } catch(e) {
+    document.getElementById('loading').style.display = 'flex';
+    loadStatus.textContent = 'MediaPipe error: ' + e.message;
+  }
+}
+</script>
+</body>
+</html>
